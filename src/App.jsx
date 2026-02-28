@@ -5,6 +5,23 @@ import Contact from './pages/Contact'
 import Navbar from './components/Navbar'
 
 function App() {
+  const canvas = document.createElement('canvas')
+  const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl')
+
+  if (gl) {
+    const debugInfo = gl.getExtension('WEBGL_debug_renderer_info')
+    if (debugInfo) {
+      const vendor = gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL)
+      const renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)
+      console.log('GPU Vendor:', vendor)
+      console.log('GPU Renderer:', renderer)
+    } else {
+      console.log('WEBGL_debug_renderer_info extension not available')
+    }
+  } else {
+    console.log('WebGL not supported')
+  }
+
   return (
     <BrowserRouter>
       <Navbar />

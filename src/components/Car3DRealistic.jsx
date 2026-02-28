@@ -1,39 +1,28 @@
 import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
-import { RGBELoader } from 'three/addons/loaders/RGBELoader.js'
-import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
+import { HDRLoader } from 'three/addons/loaders/HDRLoader.js'
 
-export default function Car3DRealistic({ scene: sceneIndex = 0 }) {
+export default function Car3DRealistic({ scene: sceneIndex = 0, scrollProgress = 0 }) {
   const mountRef = useRef(null)
-  const sceneIndexRef = useRef(sceneIndex)
-  const prevSceneRef = useRef(sceneIndex)
-  const currentCamPosRef = useRef(new THREE.Vector3(6, 3, 6))
-  const currentTargetRef = useRef(new THREE.Vector3(0, 0.5, 0))
-  const transitionPhaseRef = useRef('idle') // 'idle', 'pullback', 'moveto'
-  const pullbackProgressRef = useRef(0)
+  const scrollProgressRef = useRef(scrollProgress)
 
-  // Camera positions for each scene
-  const cameraSettings = {
-    0: { pos: [5, 2, 5], target: [0, 0.3, 0] },       // Full car view
-    1: { pos: [3, 1.5, 2], target: [1, 0.5, 0] },     // Front/engine area
-    2: { pos: [-3, 1, 2.5], target: [-1, 0.3, 0.5] }, // Wheel area
-    3: { pos: [-4, 2, -3], target: [0, 0.3, 0] },     // Back/rear view
-  }
+  // Camera orbits around the car center — defined as angle (degrees), height, distance
+  // This ensures the camera always rotates around the car and never flies through it
+  // On mobile (portrait), pull camera back so the car isn't clipped on the sides
+  const isMobileView = typeof window !== 'undefined' && window.innerWidth < 768
+  const mobScale = isMobileView ? 2 : 1
+  const cameraKeyframes = [
+    { angle: 210, height: 1, dist: 3.5 * mobScale, target: [0, 0.4, 0] },   // Scene 0: Front
+    { angle: 300, height: 2, dist: 5.5 * mobScale, target: [0, 0.3, 0] },   // Scene 1: Right side
+    { angle: 30,  height: 1.5, dist: 4 * mobScale, target: [0, 0.3, 0] },   // Scene 2: Left/rear wheels
+    { angle: 120, height: 2, dist: 5 * mobScale, target: [0, 0.3, 0] },     // Scene 3: Rear view
+  ]
 
-  // Neutral "pulled back" position for transitions
-  const pullbackPos = new THREE.Vector3(0, 4, 8)
-  const pullbackTarget = new THREE.Vector3(0, 0, 0)
-
-  // Update ref when prop changes and trigger transition
+  // Update ref when prop changes
   useEffect(() => {
-    if (sceneIndex !== prevSceneRef.current) {
-      transitionPhaseRef.current = 'pullback'
-      pullbackProgressRef.current = 0
-      prevSceneRef.current = sceneIndex
-    }
-    sceneIndexRef.current = sceneIndex
-  }, [sceneIndex])
+    scrollProgressRef.current = scrollProgress
+  }, [scrollProgress])
 
   useEffect(() => {
     if (!mountRef.current) return
@@ -46,29 +35,38 @@ export default function Car3DRealistic({ scene: sceneIndex = 0 }) {
     const isMobile = window.innerWidth < 768
 
     // Renderer setup
-    const renderer = new THREE.WebGLRenderer({ 
-      antialias: !isMobile, 
-      alpha: true,
-      powerPreference: isMobile ? 'default' : 'high-performance'
-    })
+    let renderer
+    try {
+      renderer = new THREE.WebGLRenderer({
+        antialias: !isMobile,
+        alpha: true,
+        powerPreference: isMobile ? 'default' : 'high-performance'
+      })
+    } catch (e) {
+      console.warn('WebGL not available:', e.message)
+      container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:1.2rem;">3D view requires WebGL — enable hardware acceleration in browser settings</div>'
+      return
+    }
     renderer.setSize(w, h)
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, isMobile ? 1.5 : 2))
     renderer.toneMapping = THREE.ACESFilmicToneMapping
     renderer.toneMappingExposure = 1.0
     renderer.outputColorSpace = THREE.SRGBColorSpace
     renderer.shadowMap.enabled = true
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    renderer.shadowMap.type = THREE.PCFShadowMap
     container.appendChild(renderer.domElement)
 
     const threeScene = new THREE.Scene()
 
     // Camera
     const camera = new THREE.PerspectiveCamera(40, w / h, 0.1, 100)
-    const initialSettings = cameraSettings[0]
-    camera.position.set(...initialSettings.pos)
-    currentCamPosRef.current.set(...initialSettings.pos)
-    currentTargetRef.current.set(...initialSettings.target)
-    camera.lookAt(currentTargetRef.current)
+    const initAngle = cameraKeyframes[0].angle * Math.PI / 180
+    camera.position.set(
+      Math.sin(initAngle) * cameraKeyframes[0].dist,
+      cameraKeyframes[0].height,
+      Math.cos(initAngle) * cameraKeyframes[0].dist
+    )
+    camera.lookAt(new THREE.Vector3(...cameraKeyframes[0].target))
 
     // Lights
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.4)
@@ -94,9 +92,9 @@ export default function Car3DRealistic({ scene: sceneIndex = 0 }) {
     // Ground plane
     const groundGeometry = new THREE.PlaneGeometry(100, 100)
     const groundMaterial = new THREE.MeshStandardMaterial({
-      color: 0x1a1a1a,
-      roughness: 0.15,
-      metalness: 0.8,
+      color: 0x000000,
+      roughness: 0.6,
+      metalness: 0.5,
     })
     const ground = new THREE.Mesh(groundGeometry, groundMaterial)
     ground.rotation.x = -Math.PI / 2
@@ -106,48 +104,60 @@ export default function Car3DRealistic({ scene: sceneIndex = 0 }) {
 
     let carModel = null
 
+    // Set background immediately so it's never white
+    threeScene.background = new THREE.Color(0x000000)
+
     // Load HDRI
-    const rgbeLoader = new RGBELoader()
-    rgbeLoader.load('/hdri/studio.hdr', (texture) => {
+    const hdrLoader = new HDRLoader()
+    hdrLoader.load('/hdri/studio.hdr', (texture) => {
       texture.mapping = THREE.EquirectangularReflectionMapping
       threeScene.environment = texture
-      threeScene.background = new THREE.Color(0x111111)
+      threeScene.background = new THREE.Color(0x000000)
     }, undefined, (error) => {
-      console.error('Error loading HDRI:', error)
-      threeScene.background = new THREE.Color(0x111111)
+      console.error('Error loading EXR:', error)
     })
 
     // Load car model
-    const dracoLoader = new DRACOLoader()
-    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/')
-
     const gltfLoader = new GLTFLoader()
-    gltfLoader.setDRACOLoader(dracoLoader)
 
     gltfLoader.load(
-      '/models/ferrari.glb',
+      '/models/porsche.glb',
       (gltf) => {
         carModel = gltf.scene
-        
+
+        // Scale to fit scene
         const box = new THREE.Box3().setFromObject(carModel)
-        const center = box.getCenter(new THREE.Vector3())
         const size = box.getSize(new THREE.Vector3())
-        
         const maxDim = Math.max(size.x, size.y, size.z)
         const scale = 4 / maxDim
-        carModel.scale.setScalar(scale)
-        
-        carModel.position.x = -center.x * scale
-        carModel.position.z = -center.z * scale
-        carModel.position.y = 0
+        carModel.scale.multiplyScalar(scale)
+
+        // Recompute bounds after scale and center on ground
+        const scaledBox = new THREE.Box3().setFromObject(carModel)
+        const center = scaledBox.getCenter(new THREE.Vector3())
+        carModel.position.x = -center.x
+        carModel.position.z = -center.z
+        carModel.position.y = -scaledBox.min.y // sit on ground
+
+        // Materials
+        const blackMat = new THREE.MeshStandardMaterial({
+          color: 0x111111, metalness: 0.1, roughness: 0.85,
+        })
+        const redMat = new THREE.MeshStandardMaterial({
+          color: 0xcc0000, metalness: 0.15, roughness: 0.55, envMapIntensity: 0.8,
+        })
+
+        const blackParts = new Set([
+          'part_002', 'part_003',
+          'part_021', 'part_022', 'part_023', 'part_024',
+          'part_025', 'part_026', 'part_027', 'part_028',
+        ])
 
         carModel.traverse((child) => {
           if (child.isMesh) {
             child.castShadow = true
             child.receiveShadow = true
-            if (child.material) {
-              child.material.envMapIntensity = 1.5
-            }
+            child.material = blackParts.has(child.name) ? blackMat : redMat
           }
         })
 
@@ -167,47 +177,57 @@ export default function Car3DRealistic({ scene: sceneIndex = 0 }) {
     }
     window.addEventListener('resize', handleResize)
 
-    // Animation loop with smooth pullback transitions
+    // Animation loop — camera orbits around car based on scroll
     let animationFrameId
-    const lerpSpeed = 0.04
-    const pullbackSpeed = 0.06
+    let currentAngle = cameraKeyframes[0].angle * Math.PI / 180
+    let currentHeight = cameraKeyframes[0].height
+    let currentDist = cameraKeyframes[0].dist
+    const currentTarget = new THREE.Vector3(...cameraKeyframes[0].target)
 
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate)
 
-      const currentScene = Math.min(sceneIndexRef.current, 3)
-      const settings = cameraSettings[currentScene]
-      const finalTargetPos = new THREE.Vector3(...settings.pos)
-      const finalTargetLookAt = new THREE.Vector3(...settings.target)
+      // Map scroll progress (0-1) to keyframe interpolation
+      const t = scrollProgressRef.current * (cameraKeyframes.length - 1)
+      const idx = Math.min(Math.floor(t), cameraKeyframes.length - 2)
+      const frac = t - idx
 
-      if (transitionPhaseRef.current === 'pullback') {
-        // Phase 1: Pull back to neutral position
-        currentCamPosRef.current.lerp(pullbackPos, pullbackSpeed)
-        currentTargetRef.current.lerp(pullbackTarget, pullbackSpeed)
-        
-        pullbackProgressRef.current += pullbackSpeed
-        
-        // Check if we've pulled back enough
-        if (pullbackProgressRef.current > 0.5) {
-          transitionPhaseRef.current = 'moveto'
-        }
-      } else if (transitionPhaseRef.current === 'moveto') {
-        // Phase 2: Move to target position
-        currentCamPosRef.current.lerp(finalTargetPos, lerpSpeed)
-        currentTargetRef.current.lerp(finalTargetLookAt, lerpSpeed)
-        
-        // Check if we've arrived
-        if (currentCamPosRef.current.distanceTo(finalTargetPos) < 0.1) {
-          transitionPhaseRef.current = 'idle'
-        }
-      } else {
-        // Idle: just maintain position (small adjustments)
-        currentCamPosRef.current.lerp(finalTargetPos, lerpSpeed)
-        currentTargetRef.current.lerp(finalTargetLookAt, lerpSpeed)
-      }
+      const from = cameraKeyframes[idx]
+      const to = cameraKeyframes[idx + 1]
 
-      camera.position.copy(currentCamPosRef.current)
-      camera.lookAt(currentTargetRef.current)
+      // Interpolate angle (in radians), taking shortest path
+      const fromAngle = from.angle * Math.PI / 180
+      const toAngle = to.angle * Math.PI / 180
+      let angleDiff = toAngle - fromAngle
+      // Shortest rotation path
+      while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI
+      while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI
+      const goalAngle = fromAngle + angleDiff * frac
+
+      const goalHeight = from.height + (to.height - from.height) * frac
+      const goalDist = from.dist + (to.dist - from.dist) * frac
+      const goalTarget = new THREE.Vector3().lerpVectors(
+        new THREE.Vector3(...from.target),
+        new THREE.Vector3(...to.target),
+        frac
+      )
+
+      // Smooth follow (shortest path for angle)
+      let angleDelta = goalAngle - currentAngle
+      while (angleDelta > Math.PI) angleDelta -= 2 * Math.PI
+      while (angleDelta < -Math.PI) angleDelta += 2 * Math.PI
+      currentAngle += angleDelta * 0.08
+      currentHeight += (goalHeight - currentHeight) * 0.08
+      currentDist += (goalDist - currentDist) * 0.08
+      currentTarget.lerp(goalTarget, 0.08)
+
+      // Convert polar to cartesian
+      camera.position.set(
+        Math.sin(currentAngle) * currentDist,
+        currentHeight,
+        Math.cos(currentAngle) * currentDist
+      )
+      camera.lookAt(currentTarget)
 
       renderer.render(threeScene, camera)
     }
@@ -221,7 +241,6 @@ export default function Car3DRealistic({ scene: sceneIndex = 0 }) {
         container.removeChild(renderer.domElement)
       }
       renderer.dispose()
-      dracoLoader.dispose()
     }
   }, [])
 
