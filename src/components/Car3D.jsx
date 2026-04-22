@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useRef } from 'react'
 
 export default function Car3D({ scene = 0 }) {
   const svgRef = useRef(null)
